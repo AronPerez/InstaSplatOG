@@ -85,7 +85,7 @@ def load_and_prepare_confidence(confidence_path, device='cuda', scale=(0.1, 1.0)
     return lr_modifiers
 
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, rerun=False, rerun_log_freq=100):
 
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
@@ -110,6 +110,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         save_pose(scene.model_path + f'/pose/ours_{save_iter}/pose_org.npy', gaussians.P, train_cams_init)
     bg_color = [1, 1, 1] if dataset.white_background else [0, 0, 0]
     background = torch.tensor(bg_color, dtype=torch.float32, device="cuda")
+
+    # Rerun visualization (opt-in)
+    rerun_enabled = False
+    if rerun:
+        from utils.rerun_vis import init_rerun, log_gaussians, log_scalar, is_rerun_available
+        if is_rerun_available():
+            import rerun as rr
+            from pathlib import Path
+            scene_name = Path(dataset.source_path).name
+            rerun_enabled = init_rerun(f"InstantSplat_Train_{scene_name}")
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
@@ -191,6 +201,12 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
                 progress_bar.update(10)
             if iteration == opt.iterations:
                 progress_bar.close()
+
+            # Rerun logging
+            if rerun_enabled and (iteration % rerun_log_freq == 0 or iteration == opt.iterations):
+                rr.set_time_sequence("iteration", iteration)
+                log_gaussians("world/gaussians", gaussians)
+                log_scalar("metrics/loss", ema_loss_for_log)
 
             # Densification
             # if iteration < opt.densify_until_iter:
@@ -310,6 +326,8 @@ if __name__ == "__main__":
     parser.add_argument('--disable_viewer', action='store_true', default=True)
     parser.add_argument("--checkpoint_iterations", nargs="+", type=int, default=[])
     parser.add_argument("--start_checkpoint", type=str, default = None)
+    parser.add_argument('--rerun', action='store_true', help='Enable Rerun 3D visualization')
+    parser.add_argument('--rerun_log_freq', type=int, default=100, help='Log Gaussians to Rerun every N iterations')
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -324,7 +342,7 @@ if __name__ == "__main__":
     if not args.disable_viewer:
         network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.rerun, args.rerun_log_freq)
 
     # All done
     print("\nTraining complete.")
