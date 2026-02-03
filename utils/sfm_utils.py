@@ -16,7 +16,6 @@ import torchvision.transforms as tvf
 import torchvision.transforms.functional as tf
 import roma
 import scipy
-import open3d as o3d
 from tqdm import tqdm
 
 from dust3r.utils.image import _resize_pil_image
@@ -491,6 +490,42 @@ def align_pose(pose1, pose2):
     mtx2 = mtx2 * s
 
     return mtx1, mtx2, R
+
+def stack_images(imgs_list):
+    """Stack a list of (H_i, W_i, 3) float images into (M, H, W, 3) array.
+
+    Resizes any image whose shape differs from the first to match.
+    """
+    if not imgs_list:
+        return np.array(imgs_list)
+    target_hw = imgs_list[0].shape[:2]
+    result = []
+    for img in imgs_list:
+        if img.shape[:2] != target_hw:
+            pil_img = PIL.Image.fromarray((img * 255).astype(np.uint8))
+            pil_img = pil_img.resize((target_hw[1], target_hw[0]), PIL.Image.LANCZOS)
+            img = np.array(pil_img) / 255.0
+        result.append(img)
+    return np.array(result)
+
+
+def stack_maps(maps_list):
+    """Stack a list of (H_i, W_i) maps into (M, H, W) array.
+
+    Resizes any map whose shape differs from the first to match.
+    """
+    if not maps_list:
+        return np.array(maps_list)
+    target_hw = maps_list[0].shape[:2]
+    result = []
+    for m in maps_list:
+        if m.shape[:2] != target_hw:
+            pil_img = PIL.Image.fromarray(m)
+            pil_img = pil_img.resize((target_hw[1], target_hw[0]), PIL.Image.NEAREST)
+            m = np.array(pil_img)
+        result.append(m)
+    return np.array(result)
+
 
 def storePly(path, xyz, rgb):
     # Define the dtype for the structured array

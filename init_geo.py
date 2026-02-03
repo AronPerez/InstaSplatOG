@@ -17,7 +17,8 @@ from dust3r.utils.device import to_numpy
 from dust3r.utils.geometry import inv
 from dust3r.cloud_opt import global_aligner, GlobalAlignerMode
 from utils.sfm_utils import (save_intrinsics, save_extrinsic, save_points3D, save_time, save_images_and_masks,
-                             init_filestructure, get_sorted_image_files, split_train_test, load_images, compute_co_vis_masks)
+                             init_filestructure, get_sorted_image_files, split_train_test, load_images, compute_co_vis_masks,
+                             stack_images, stack_maps)
 from utils.camera_utils import generate_interpolated_path
 
 
@@ -51,12 +52,12 @@ def main(source_path, model_path, ckpt_path, device, batch_size, image_size, sch
     extrinsics_w2c = inv(to_numpy(scene.get_im_poses()))
     intrinsics = to_numpy(scene.get_intrinsics())
     focals = to_numpy(scene.get_focals())
-    imgs = np.array(scene.imgs)
+    imgs = stack_images(scene.imgs)
     pts3d = to_numpy(scene.get_pts3d())
     pts3d = np.array(pts3d)
     depthmaps = to_numpy(scene.im_depthmaps.detach().cpu().numpy())
     values = [param.detach().cpu().numpy() for param in scene.im_conf]
-    confs = np.array(values)
+    confs = stack_maps(values)
     
     if conf_aware_ranking:
         print(f'>> Confiden-aware Ranking...')

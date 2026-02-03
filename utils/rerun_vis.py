@@ -157,3 +157,133 @@ def log_scalar(entity_path: str, value: float):
     if not RERUN_AVAILABLE:
         return
     rr.log(entity_path, rr.Scalar(value))
+
+
+# --- Segmentation visualization ---
+
+# Per-object color palette (distinguishable colors)
+_OBJECT_COLORS = [
+    [230, 25, 75],    # red
+    [60, 180, 75],    # green
+    [0, 130, 200],    # blue
+    [255, 225, 25],   # yellow
+    [245, 130, 48],   # orange
+    [145, 30, 180],   # purple
+    [70, 240, 240],   # cyan
+    [240, 50, 230],   # magenta
+    [210, 245, 60],   # lime
+    [250, 190, 212],  # pink
+    [0, 128, 128],    # teal
+    [170, 110, 40],   # brown
+]
+
+
+def log_segmented_scene(
+    rec,
+    segmentation,
+    pts3d_flat: np.ndarray,
+    colors_flat: Optional[np.ndarray] = None,
+):
+    """Log segmented scene to Rerun with separate entities per object.
+
+    Args:
+        rec: Rerun recording handle (from rr.new_recording)
+        segmentation: SceneSegmentation instance
+        pts3d_flat: (N, 3) flattened 3D points
+        colors_flat: (N, 3) optional RGB colors [0,1] or uint8
+    """
+    if not RERUN_AVAILABLE:
+        return
+
+    # Adaptive downsample limits based on object count to cap total at ~1M points
+    n_objects = len(segmentation.objects)
+    max_bg_pts = min(500_000, 1_000_000 // max(n_objects + 1, 1))
+    max_obj_pts = min(200_000, 1_000_000 // max(n_objects, 1))
+    print(f"[Rerun] Logging {n_objects} objects (max {max_obj_pts} pts/obj, {max_bg_pts} bg pts)...")
+
+    # Prepare colors
+    if colors_flat is not None and colors_flat.dtype != np.uint8:
+        colors_u8 = (np.clip(colors_flat, 0, 1) * 255).astype(np.uint8)
+    else:
+        colors_u8 = colors_flat
+
+    # Log background points
+    if segmentation.background_indices is not None and len(segmentation.background_indices) > 0:
+        bg_idx = segmentation.background_indices
+        bg_pts = pts3d_flat[bg_idx]
+        bg_colors = colors_u8[bg_idx] if colors_u8 is not None else None
+
+        # Downsample background if large
+        if len(bg_pts) > max_bg_pts:
+            sample = np.random.choice(len(bg_pts), max_bg_pts, replace=False)
+            bg_pts = bg_pts[sample]
+            bg_colors = bg_colors[sample] if bg_colors is not None else None
+
+        rec.log("world/background/points", rr.Points3D(
+            positions=bg_pts, colors=bg_colors, radii=0.003,
+        ), static=True)
+
+    # Log each object
+    for i, obj in enumerate(segmentation.objects):
+        color = _OBJECT_COLORS[i % len(_OBJECT_COLORS)]
+        safe_label = obj.label.replace(" ", "_")
+        entity = f"world/objects/{safe_label}_{obj.object_id}"
+
+        obj_pts = pts3d_flat[obj.point_indices]
+
+        # Downsample if large
+        if len(obj_pts) > max_obj_pts:
+            sample = np.random.choice(len(obj_pts), max_obj_pts, replace=False)
+            obj_pts = obj_pts[sample]
+
+        # Use object-specific color for distinction
+        obj_colors = np.tile(np.array(color, dtype=np.uint8), (len(obj_pts), 1))
+
+        rec.log(f"{entity}/points", rr.Points3D(
+            positions=obj_pts, colors=obj_colors, radii=0.005,
+        ), static=True)
+
+        # Log bounding box
+        bbox_min, bbox_max = obj.bbox_3d
+        center = (bbox_min + bbox_max) / 2
+        half_size = (bbox_max - bbox_min) / 2
+        rec.log(f"{entity}/bbox", rr.Boxes3D(
+            centers=[center],
+            half_sizes=[half_size],
+            colors=[color],
+            labels=[f"{obj.label} ({obj.confidence:.2f})"],
+        ), static=True)
+
+    print(f"[Rerun] Segmented scene logged.")
+
+
+def update_object_transform(rec, object_id: int, label: str, transform):
+    """Re-log only the Transform3D for an object entity (fast update).
+
+    Args:
+        rec: Rerun recording handle
+        object_id: object ID
+        label: object label string
+        transform: ObjectTransform instance with translation, rotation_euler, scale
+    """
+    if not RERUN_AVAILABLE:
+        return
+
+    from scipy.spatial.transform import Rotation as R
+
+    safe_label = label.replace(" ", "_")
+    entity = f"world/objects/{safe_label}_{object_id}"
+
+    # Build 3x3 rotation matrix from euler angles
+    rot_mat = R.from_euler("xyz", transform.rotation_euler, degrees=True).as_matrix()
+
+    # Build scale matrix
+    scale_mat = np.diag(transform.scale)
+
+    # Combined transform: scale then rotate
+    mat3x3 = rot_mat @ scale_mat
+
+    rec.log(entity, rr.Transform3D(
+        translation=transform.translation,
+        mat3x3=mat3x3,
+    ))
