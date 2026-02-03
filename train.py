@@ -85,7 +85,7 @@ def load_and_prepare_confidence(confidence_path, device='cuda', scale=(0.1, 1.0)
     return lr_modifiers
 
 
-def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, rerun=False, rerun_log_freq=100):
+def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from, rerun=False, rerun_log_freq=100, rerun_web=False):
 
     first_iter = 0
     tb_writer = prepare_output_and_logger(dataset)
@@ -119,7 +119,7 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             import rerun as rr
             from pathlib import Path
             scene_name = Path(dataset.source_path).name
-            rerun_enabled = init_rerun(f"InstantSplat_Train_{scene_name}")
+            rerun_enabled = init_rerun(f"InstantSplat_Train_{scene_name}", web=rerun_web)
 
     iter_start = torch.cuda.Event(enable_timing = True)
     iter_end = torch.cuda.Event(enable_timing = True)
@@ -328,6 +328,7 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default = None)
     parser.add_argument('--rerun', action='store_true', help='Enable Rerun 3D visualization')
     parser.add_argument('--rerun_log_freq', type=int, default=100, help='Log Gaussians to Rerun every N iterations')
+    parser.add_argument('--rerun_web', action='store_true', help='Use Rerun web viewer (for headless servers)')
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
 
@@ -342,7 +343,7 @@ if __name__ == "__main__":
     if not args.disable_viewer:
         network_gui.init(args.ip, args.port)
     torch.autograd.set_detect_anomaly(args.detect_anomaly)
-    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.rerun, args.rerun_log_freq)
+    training(lp.extract(args), op.extract(args), pp.extract(args), args.test_iterations, args.save_iterations, args.checkpoint_iterations, args.start_checkpoint, args.debug_from, args.rerun, args.rerun_log_freq, args.rerun_web)
 
     # All done
     print("\nTraining complete.")

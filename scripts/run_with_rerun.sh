@@ -22,7 +22,8 @@ python -W ignore ./init_geo.py \
     --focal_avg \
     --co_vis_dsp \
     --conf_aware_ranking \
-    --rerun
+    --rerun \
+    --rerun_web
 
 # (2) Training
 python ./train.py \
@@ -34,6 +35,7 @@ python ./train.py \
     --pp_optimizer \
     --optim_pose \
     --rerun \
+    --rerun_web \
     --rerun_log_freq 100
 
 echo "=== Done. Check Rerun viewer. ==="

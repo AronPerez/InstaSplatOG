@@ -16,12 +16,18 @@ def is_rerun_available() -> bool:
     return RERUN_AVAILABLE
 
 
-def init_rerun(recording_name: str, spawn: bool = True) -> bool:
+def init_rerun(recording_name: str, spawn: bool = True, web: bool = False) -> bool:
     """Initialize Rerun. Returns True if successful."""
     if not RERUN_AVAILABLE:
         print("[Rerun] rerun-sdk not installed. Install with: pip install rerun-sdk")
         return False
-    rr.init(recording_name, spawn=spawn)
+    rr.init(recording_name)
+    if web:
+        server_uri = rr.serve_grpc()
+        rr.serve_web_viewer(open_browser=False, connect_to=server_uri)
+        print(f"[Rerun] Web viewer at http://localhost:9090 (gRPC at {server_uri})")
+    elif spawn:
+        rr.spawn()
     rr.log("world", rr.ViewCoordinates.RDF, static=True)
     return True
 

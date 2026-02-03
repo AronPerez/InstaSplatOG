@@ -21,3 +21,4 @@ plyfile
 open3d
 # Optional: 3D visualization
 # rerun-sdk>=0.18.0
+# gradio_rerun
