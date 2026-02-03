@@ -22,7 +22,7 @@ from utils.camera_utils import generate_interpolated_path
 
 
 def main(source_path, model_path, ckpt_path, device, batch_size, image_size, schedule, lr, niter, 
-         min_conf_thr, llffhold, n_views, co_vis_dsp, depth_thre, conf_aware_ranking=False, focal_avg=False, infer_video=False):
+         min_conf_thr, llffhold, n_views, co_vis_dsp, depth_thre, conf_aware_ranking=False, focal_avg=False, infer_video=False, rerun=False):
 
     # ---------------- (1) Load model and images ----------------  
     save_path, sparse_0_path, sparse_1_path = init_filestructure(Path(source_path), n_views)
@@ -81,6 +81,21 @@ def main(source_path, model_path, ckpt_path, device, batch_size, image_size, sch
     Train_Time = end_time - start_time
     print(f"Time taken for {n_views} views: {Train_Time} seconds")
     save_time(model_path, '[1] coarse_init_TrainTime', Train_Time)
+
+    # Rerun visualization (opt-in)
+    if rerun:
+        from utils.rerun_vis import init_rerun, log_reconstruction, is_rerun_available
+        from utils.reconstruction_result import ReconstructionResult
+        if is_rerun_available():
+            scene_name = Path(source_path).name
+            if init_rerun(f"InstantSplat_Init_{scene_name}"):
+                result = ReconstructionResult.from_scene(
+                    scene, imgs, pts3d, confs=confs,
+                    depthmaps=depthmaps if depth_thre > 0 else None,
+                    image_files=image_files,
+                )
+                log_reconstruction(result, entity_prefix="world",
+                                   log_depths=(depth_thre > 0), static=True)
 
     # ---------------- (2) Interpolate training pose to get initial testing pose ----------------
     if not infer_video:
@@ -149,7 +164,8 @@ if __name__ == "__main__":
     parser.add_argument('--co_vis_dsp', action="store_true")
     parser.add_argument('--depth_thre', type=float, default=0.01, help='Depth threshold')
     parser.add_argument('--infer_video', action="store_true")
+    parser.add_argument('--rerun', action="store_true", help='Enable Rerun 3D visualization')
 
     args = parser.parse_args()
     main(args.source_path, args.model_path, args.ckpt_path, args.device, args.batch_size, args.image_size, args.schedule, args.lr, args.niter,         
-          args.min_conf_thr, args.llffhold, args.n_views, args.co_vis_dsp, args.depth_thre, args.conf_aware_ranking, args.focal_avg, args.infer_video)
+          args.min_conf_thr, args.llffhold, args.n_views, args.co_vis_dsp, args.depth_thre, args.conf_aware_ranking, args.focal_avg, args.infer_video, args.rerun)
