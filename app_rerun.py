@@ -151,13 +151,15 @@ def run_segmentation(
 
     if pts3d_state is None:
         gr.Warning("Run geometry initialization first.")
-        yield None, None, None, gr.update(choices=[], value=None)
+        yield None, None, None, gr.update(choices=[], value=None), stream_state
         return
 
     pts3d = pts3d_state
     imgs = imgs_state
     rec = rec_state
-    stream = stream_state
+    # Create a new binary stream — replays static data (header + cameras + points)
+    # so the Rerun viewer gets a complete recording when the component resets.
+    stream = rec.binary_stream()
 
     # Run segmentation
     print("[Segmentation] Running segment_scene_auto...")
@@ -170,14 +172,14 @@ def run_segmentation(
         )
     except ImportError as e:
         gr.Warning(str(e))
-        yield stream.read() if stream else None, None, None, gr.update(choices=[], value=None)
+        yield stream.read() if stream else None, None, None, gr.update(choices=[], value=None), stream
         return
 
     print(f"[Segmentation] Found {len(segmentation.objects)} objects.")
 
     if len(segmentation.objects) == 0:
         gr.Warning("No objects detected. Try lowering the confidence threshold or changing the text prompt.")
-        yield stream.read() if stream else None, None, None, gr.update(choices=[], value=None)
+        yield stream.read() if stream else None, None, None, gr.update(choices=[], value=None), stream
         return
 
     # Build colors for visualization
@@ -207,6 +209,7 @@ def run_segmentation(
         segmentation,
         None,
         gr.update(choices=labels, value=labels[0] if labels else None),
+        stream,
     )
 
     # Create editor with point-cloud-based Gaussian data
@@ -233,6 +236,7 @@ def run_segmentation(
         segmentation,
         editor,
         gr.update(choices=labels, value=labels[0] if labels else None),
+        stream,
     )
 
 
@@ -530,7 +534,7 @@ def build_app():
         seg_btn.click(
             run_segmentation,
             inputs=[raw_pts3d, raw_imgs, rec_state, stream_state, seg_prompt, seg_confidence],
-            outputs=[viewer, segmentation_state, editor_state, object_dropdown],
+            outputs=[viewer, segmentation_state, editor_state, object_dropdown, stream_state],
         )
 
         object_dropdown.change(
