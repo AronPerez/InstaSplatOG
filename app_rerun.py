@@ -100,6 +100,9 @@ def run_init_geo_with_rerun(source_path, uploaded_dir, n_views, conf_threshold):
     del model, output, scene
     torch.cuda.empty_cache()
 
+    # Create fresh stream BEFORE logging so it captures all data directly
+    stream = rec.binary_stream()
+
     # Log point cloud
     if result.colors is not None and result.colors.dtype != np.uint8:
         colors_uint8 = (np.clip(result.colors, 0, 1) * 255).astype(np.uint8)
@@ -108,7 +111,6 @@ def run_init_geo_with_rerun(source_path, uploaded_dir, n_views, conf_threshold):
     rec.log("world/points", rr.Points3D(
         positions=result.points, colors=colors_uint8, radii=0.005
     ), static=True)
-    yield stream.read(), None, None, None, None
 
     # Log cameras
     for i in range(len(result.camera_poses_c2w)):
@@ -132,7 +134,7 @@ def run_init_geo_with_rerun(source_path, uploaded_dir, n_views, conf_threshold):
             img_u8 = (np.clip(img, 0, 1) * 255).astype(np.uint8)
             rec.log(f"world/cameras/{name}/image", rr.Image(img_u8), static=True)
 
-    # Yield final data: viewer bytes + preserved state for segmentation
+    # Single read captures header + static replay + all logged data
     yield stream.read(), pts3d, imgs, rec, stream
 
 
