@@ -2,6 +2,7 @@
 
 Includes furniture segmentation, object manipulation, and multi-format export.
 """
+import ipaddress
 import os
 import tempfile
 
@@ -28,17 +29,77 @@ from utils.reconstruction_result import ReconstructionResult
 # When serving over plain HTTP to a remote browser, the Rerun WASM viewer's
 # open_channel() fails. This polyfill uses crypto.getRandomValues() which
 # IS available in non-secure contexts.
+# TODO: Gradio's `head=` parameter injects into <head> before component JS runs.
+# Check if future Gradio versions deprecate or change this mechanism.
 _CRYPTO_POLYFILL = """
 <script>
 if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function') {
     crypto.randomUUID = function() {
         return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, function(c) {
-            return (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16);
+            return (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> c / 4))).toString(16);
         });
     };
 }
 </script>
 """
+
+
+def _generate_self_signed_cert(cert_dir=None):
+    """Generate a self-signed TLS certificate for local HTTPS serving.
+
+    Certs are persisted to cert_dir (default ~/.instantsplat/ssl/) so they
+    are reused across restarts, avoiding repeated browser trust prompts.
+    """
+    from cryptography import x509
+    from cryptography.x509.oid import NameOID
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    import datetime, socket
+
+    if cert_dir is None:
+        cert_dir = Path.home() / ".instantsplat" / "ssl"
+    cert_dir = Path(cert_dir)
+
+    cert_path = cert_dir / "cert.pem"
+    key_path = cert_dir / "key.pem"
+
+    if cert_path.exists() and key_path.exists():
+        return str(cert_path), str(key_path)
+
+    cert_dir.mkdir(parents=True, exist_ok=True)
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    hostname = socket.gethostname()
+    subject = issuer = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, hostname),
+    ])
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(issuer)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(datetime.datetime.utcnow())
+        .not_valid_after(datetime.datetime.utcnow() + datetime.timedelta(days=365))
+        .add_extension(
+            x509.SubjectAlternativeName([
+                x509.DNSName(hostname),
+                x509.DNSName("localhost"),
+                x509.IPAddress(ipaddress.IPv4Address("127.0.0.1")),
+            ]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+
+    key_path.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.TraditionalOpenSSL,
+        serialization.NoEncryption(),
+    ))
+    cert_path.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+
+    return str(cert_path), str(key_path)
 
 
 def preview_uploads(input_files):
@@ -610,9 +671,39 @@ def build_app():
 
 
 if __name__ == "__main__":
+    import argparse
+
     if not GRADIO_RERUN_AVAILABLE:
         print("Install gradio_rerun: pip install gradio_rerun")
         exit(1)
+
+    parser = argparse.ArgumentParser(description="InstantSplat Gradio app with Rerun viewer")
+    parser.add_argument("--port", type=int, default=int(os.environ.get("GRADIO_SERVER_PORT", 7860)))
+    parser.add_argument("--host", default="0.0.0.0")
+    parser.add_argument("--ssl", action="store_true", help="Enable HTTPS with auto-generated self-signed certificate")
+    parser.add_argument("--ssl-certfile", default=None, help="Path to SSL certificate (implies --ssl)")
+    parser.add_argument("--ssl-keyfile", default=None, help="Path to SSL private key (implies --ssl)")
+    parser.add_argument("--share", action="store_true", help="Create a public Gradio tunnel")
+    args = parser.parse_args()
+
+    launch_kwargs = dict(
+        server_name=args.host,
+        server_port=args.port,
+        share=args.share,
+    )
+
+    if args.ssl_certfile or args.ssl_keyfile:
+        if not (args.ssl_certfile and args.ssl_keyfile):
+            parser.error("--ssl-certfile and --ssl-keyfile must both be provided")
+        launch_kwargs["ssl_certfile"] = args.ssl_certfile
+        launch_kwargs["ssl_keyfile"] = args.ssl_keyfile
+        launch_kwargs["ssl_verify"] = False
+    elif args.ssl:
+        certfile, keyfile = _generate_self_signed_cert()
+        launch_kwargs["ssl_certfile"] = certfile
+        launch_kwargs["ssl_keyfile"] = keyfile
+        launch_kwargs["ssl_verify"] = False
+        print(f"Using self-signed certificate: {certfile}")
+
     demo = build_app()
-    port = int(os.environ.get("GRADIO_SERVER_PORT", 7860))
-    demo.launch(server_name="0.0.0.0", server_port=port)
+    demo.launch(**launch_kwargs)
