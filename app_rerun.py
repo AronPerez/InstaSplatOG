@@ -24,6 +24,22 @@ from utils.rerun_vis import (
 )
 from utils.reconstruction_result import ReconstructionResult
 
+# Polyfill: crypto.randomUUID() requires a secure context (HTTPS or localhost).
+# When serving over plain HTTP to a remote browser, the Rerun WASM viewer's
+# open_channel() fails. This polyfill uses crypto.getRandomValues() which
+# IS available in non-secure contexts.
+_CRYPTO_POLYFILL = """
+<script>
+if (typeof crypto !== 'undefined' && typeof crypto.randomUUID !== 'function') {
+    crypto.randomUUID = function() {
+        return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, function(c) {
+            return (+c ^ crypto.getRandomValues(new Uint8Array(1))[0] & 15 >> +c / 4).toString(16);
+        });
+    };
+}
+</script>
+"""
+
 
 def preview_uploads(input_files):
     """Process uploaded images: resize, save to temp dir, return gallery preview."""
@@ -85,6 +101,7 @@ def run_init_geo_with_rerun(source_path, uploaded_dir, n_views, conf_threshold):
     output = inference(pairs, model, device, batch_size=1, verbose=True)
     scene = global_aligner(output, device=device, mode=GlobalAlignerMode.PointCloudOptimizer)
     scene.compute_global_alignment(init="mst", niter=300, schedule="cosine", lr=0.01)
+    print("[DEBUG] Alignment complete, extracting results...")
 
     imgs = stack_images(scene.imgs)
     pts3d = np.array(to_numpy(scene.get_pts3d()))
@@ -95,15 +112,19 @@ def run_init_geo_with_rerun(source_path, uploaded_dir, n_views, conf_threshold):
         image_files=image_files,
         conf_threshold=float(conf_threshold),
     )
+    print(f"[DEBUG] ReconstructionResult: {result.points.shape} points, "
+          f"{result.camera_poses_c2w.shape} cameras")
+    for i in range(len(result.camera_poses_c2w)):
+        t = result.camera_poses_c2w[i][:3, 3]
+        print(f"[DEBUG] Camera {i} translation: [{t[0]:.4f}, {t[1]:.4f}, {t[2]:.4f}]")
+    print(f"[DEBUG] Has NaN in poses: {np.any(np.isnan(result.camera_poses_c2w))}")
+    print(f"[DEBUG] Has NaN in points: {np.any(np.isnan(result.points))}")
 
     # Free MASt3R from GPU
     del model, output, scene
     torch.cuda.empty_cache()
 
-    # Create fresh stream BEFORE logging so it captures all data directly
-    stream = rec.binary_stream()
-
-    # Log point cloud
+    # Log point cloud (data goes to the existing stream — no second binary_stream())
     if result.colors is not None and result.colors.dtype != np.uint8:
         colors_uint8 = (np.clip(result.colors, 0, 1) * 255).astype(np.uint8)
     else:
@@ -111,6 +132,7 @@ def run_init_geo_with_rerun(source_path, uploaded_dir, n_views, conf_threshold):
     rec.log("world/points", rr.Points3D(
         positions=result.points, colors=colors_uint8, radii=0.005
     ), static=True)
+    print(f"[DEBUG] Logged {len(result.points)} points to Rerun")
 
     # Log cameras
     for i in range(len(result.camera_poses_c2w)):
@@ -133,9 +155,13 @@ def run_init_geo_with_rerun(source_path, uploaded_dir, n_views, conf_threshold):
         if img is not None:
             img_u8 = (np.clip(img, 0, 1) * 255).astype(np.uint8)
             rec.log(f"world/cameras/{name}/image", rr.Image(img_u8), static=True)
+    print(f"[DEBUG] Logged {len(result.camera_poses_c2w)} cameras to Rerun")
 
-    # Single read captures header + static replay + all logged data
-    yield stream.read(), pts3d, imgs, rec, stream
+    # Single read drains only new data since last read (points + cameras, no duplicate header)
+    data = stream.read()
+    print(f"[DEBUG] Stream data size: {len(data)} bytes")
+
+    yield data, pts3d, imgs, rec, stream
 
 
 def run_segmentation(
@@ -426,7 +452,7 @@ def on_export_scene(export_format, editor_state, segmentation_state):
 
 
 def build_app():
-    with gr.Blocks(title="InstantSplat + Rerun") as demo:
+    with gr.Blocks(title="InstantSplat + Rerun", head=_CRYPTO_POLYFILL) as demo:
         gr.Markdown("# InstantSplat 3D Viewer")
         gr.Markdown("Run geometry initialization, segment furniture, and manipulate objects in 3D.")
 
